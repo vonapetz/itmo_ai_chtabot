@@ -1,9 +1,10 @@
-requests==2.31.0
-beautifulsoup4==4.12.2
-lxml==4.9.3
-transformers==4.35.0
-torch==2.1.0
-sentence-transformers==2.2.2
-faiss-cpu==1.7.4
-python-telegram-bot==20.6
-python-dotenv==1.0.0
+# Последние библиотеки тоже совместимы друг с другом
+requests==2.32.4
+beautifulsoup4==4.13.4
+lxml==6.00
+transformers==4.53.3 
+torch==2.7.1 
+sentence-transformers==5.0.0
+faiss-cpu==1.11.0
+python-telegram-bot==22.3
+python-dotenv==1.1.1
