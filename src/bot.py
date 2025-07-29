@@ -7,14 +7,17 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Messa
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-from dotenv import load_dotenv # Для загрузки переменных окружения
+from dotenv import load_dotenv
+# Импорты для OpenAI
+from openai import OpenAI, APIError, RateLimitError, AuthenticationError
 
 # --- Загрузка переменных окружения ---
 load_dotenv()
 
 # --- Конфигурация ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") # <-- Читаем токен из .env
-MODEL_NAME = 'intfloat/multilingual-e5-large' # Хорошая модель для русского
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+MODEL_NAME = 'intfloat/multilingual-e5-large'
 FAISS_INDEX_PATH = 'models/faiss_index.bin'
 CHUNKS_PATH = 'models/chunks.json'
 DATA_FILE_PATH = 'data/programs_data.json'
@@ -26,10 +29,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Глобальные переменные для модели и индекса ---
+# --- Глобальные переменные ---
 model = None
 index = None
 chunks = None
+programs_data = None
+# Инициализация клиента OpenAI
+client = None
 
 # --- Состояния для рекомендаций ---
 BACKGROUND, INTERESTS, CAREER = range(3)
@@ -55,49 +61,52 @@ RECOMMEND_RESULT_MESSAGE = (
     "- Бэкграунд: {background}\n"
     "- Интересы: {interests}\n"
     "- Карьерная цель: {career_goal}\n\n"
-    "📊 Рекомендация: {recommended_program}\n"
+    "📊 Рекомендация: *{recommended_program}*\n"
     "📌 Причина: {reason}\n\n"
     "Теперь ты можешь задать мне вопросы об этой программе!"
 )
 RECOMMEND_CANCEL_MESSAGE = "Рекомендация отменена. Можешь задать любой вопрос о программах."
-NOT_RELEVANT_MESSAGE = "Извините, я не могу найти информацию по вашему вопросу в данных о магистратурах ИТМО. Пожалуйста, задайте вопрос, связанный с программами 'Искусственный интеллект' или 'AI и ML в технических системах'."
-ERROR_MESSAGE = "Произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте позже."
-NO_DATA_MESSAGE = "Извините, бот еще не готов. Попробуйте позже."
-BOT_READY_MESSAGE = "✅ Бот готов к работе!"
+
+# --- Сообщение, если OpenAI API не настроен ---
+NO_LLM_MESSAGE = (
+    "Бот настроен, но API-ключ для генерации ответов (OpenAI) не найден.\n"
+    "Пожалуйста, укажите `OPENAI_API_KEY` в файле `.env` для полноценной работы.\n"
+    "В качестве альтернативы, вы можете использовать предыдущую версию бота без LLM."
+)
+
+# --- Сообщения об ошибках API ---
+LLM_API_ERROR_MESSAGE = "К сожалению, возникла ошибка при обращении к сервису генерации ответов. Попробуйте задать вопрос позже."
+LLM_AUTH_ERROR_MESSAGE = "Ошибка аутентификации с API генерации ответов. Обратитесь к администратору бота."
+LLM_RATE_LIMIT_MESSAGE = "Превышен лимит запросов к сервису генерации ответов. Попробуйте задать вопрос через несколько минут."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start."""
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=START_MESSAGE)
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=START_MESSAGE, parse_mode='Markdown')
 
-# --- Логика рекомендаций ---
+# --- Логика рекомендаций (без изменений) ---
 async def recommend_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начинает процесс рекомендации."""
     await update.message.reply_text(RECOMMEND_START_MESSAGE)
     return BACKGROUND
 
 async def recommend_background(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получает бэкграунд."""
     context.user_data['background'] = update.message.text
     await update.message.reply_text(RECOMMEND_INTERESTS_MESSAGE)
     return INTERESTS
 
 async def recommend_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получает интересы."""
     context.user_data['interests'] = update.message.text
     await update.message.reply_text(RECOMMEND_CAREER_MESSAGE)
     return CAREER
 
 async def recommend_career(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получает карьерную цель и выдает рекомендацию."""
     context.user_data['career_goal'] = update.message.text
     
     background = context.user_data.get('background', '').lower()
     interests = context.user_data.get('interests', '').lower()
     career_goal = context.user_data.get('career_goal', '').lower()
 
-    # Простое сопоставление ключевых слов
-    ai_keywords = ['ml engineer', 'data engineer', 'data scientist', 'computer vision', 'nlp', 'reinforcement learning', 'машинное обучение', 'глубокое обучение', 'нейронные сети', 'алгоритмы', 'программирование', 'математика', 'статистика']
-    ai_product_keywords = ['product manager', 'ai product', 'product', 'бизнес', 'аналитик', 'data analyst', 'системный подход', 'экономика', 'менеджмент', 'управление проектами']
+    ai_keywords = ['ml engineer', 'data engineer', 'data scientist', 'computer vision', 'nlp', 'reinforcement learning', 'машинное обучение', 'глубокое обучение', 'нейронные сети', 'алгоритмы', 'программирование', 'математика', 'статистика', ' middle', 'middle']
+    ai_product_keywords = ['product manager', 'ai product', 'product', 'бизнес', 'аналитик', 'data analyst', 'системный подход', 'экономика', 'менеджмент', 'управление проектами', 'developer']
 
     ai_score = sum(1 for keyword in ai_keywords if keyword in interests or keyword in career_goal or keyword in background)
     ai_product_score = sum(1 for keyword in ai_product_keywords if keyword in interests or keyword in career_goal or keyword in background)
@@ -109,7 +118,6 @@ async def recommend_career(update: Update, context: ContextTypes.DEFAULT_TYPE):
         recommended_program = "AI и ML в технических системах"
         reason = "так как ты упомянул интерес к продуктам, бизнесу или анализу данных (AI Product Manager, Data Analyst и т.д.)."
     else:
-        # Если счет равный или нулевой, можно предложить обе или одну по умолчанию
         recommended_program = "Искусственный интеллект"
         reason = "так как эта программа имеет более широкий охват технических ролей в области ИИ."
 
@@ -121,75 +129,116 @@ async def recommend_career(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reason=reason
     )
     
-    await update.message.reply_text(final_message)
+    await update.message.reply_text(final_message, parse_mode='Markdown')
     return ConversationHandler.END
 
 async def recommend_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отменяет процесс рекомендации."""
     await update.message.reply_text(RECOMMEND_CANCEL_MESSAGE)
     return ConversationHandler.END
 
-# --- Логика обработки вопросов ---
+# --- НОВАЯ ЛОГИКА ОБРАБОТКИ ВОПРОСОВ С ИСПОЛЬЗОВАНИЕМ LLM ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик всех текстовых сообщений."""
     user_question = update.message.text
     logger.info(f"Получен вопрос от пользователя {update.effective_user.first_name}: {user_question}")
 
+    # Проверка наличия необходимых компонентов
     if not model or not index or not chunks:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=NO_DATA_MESSAGE)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Извините, бот еще не готов. Попробуйте позже.")
+        return
+
+    if not client:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=NO_LLM_MESSAGE)
         return
 
     try:
-        # 1. Создание эмбеддинга вопроса
+        # 1. Поиск релевантного контекста
+        # Создание эмбеддинга вопроса
         question_embedding = model.encode([user_question])
         question_embedding = np.array(question_embedding).astype('float32')
 
-        # 2. Поиск похожих чанков
+        # Поиск похожих чанков
         k = 3
         distances, indices = index.search(question_embedding, k)
         
-        # 3. Фильтрация по релевантности
-        relevant_chunks = []
-        for i, idx in enumerate(indices[0]):
-            if distances[0][i] < 100: # Эмпирический порог
-                 relevant_chunks.append(chunks[idx])
+        # Фильтрация по релевантности
+        relevance_threshold = 80.0 
+        best_distance = distances[0][0] if len(distances[0]) > 0 else float('inf')
 
-        if not relevant_chunks:
-             await context.bot.send_message(chat_id=update.effective_chat.id, text=NOT_RELEVANT_MESSAGE)
-             return
+        # 2. Подготовка данных для LLM
+        system_prompt = (
+            "Вы являетесь полезным помощником для абитуриентов, выбирающих магистерские программы "
+            "ИТМО 'Искусственный интеллект' и 'AI и ML в технических системах'. "
+            "Ваша задача - отвечать на вопросы абитуриентов на основе предоставленной информации. "
+            "Информация будет содержаться в разделе 'Контекст'. "
+            "Если в 'Контексте' нет информации для ответа на вопрос, вежливо сообщите, что не знаете ответа. "
+            "Всегда отвечайте на русском языке. "
+            "Не придумывайте факты, которых нет в контексте. "
+            "Если вопрос не по теме программ ИТМО, вежливо укажите на это."
+            "Отвечай приветливо и вежливо"
+        )
 
-        # 4. Формирование контекста и генерация ответа
-        # Для простоты и без внешней LLM, создаем ответ из найденных фрагментов
-        answer_parts = ["Вот информация, которая может быть вам полезна:\n"]
-        for chunk in relevant_chunks:
-            # Форматируем ответ, чтобы он был читаемым
-            source_info = f"🔹 Источник: {chunk['source']}"
-            if chunk['field'] == 'about':
-                answer_parts.append(f"{source_info}\n📄 О программе: {chunk['text']}\n")
-            elif chunk['field'] == 'career':
-                answer_parts.append(f"{source_info}\n💼 Карьера: {chunk['text']}\n")
-            elif chunk['field'] == 'directions':
-                answer_parts.append(f"{source_info}\n🧭 Направления: {chunk['text']}\n")
-            elif chunk['field'] == 'scholarships':
-                answer_parts.append(f"{source_info}\n💰 Стипендии: {chunk['text']}\n")
-            elif chunk['field'] == 'international':
-                answer_parts.append(f"{source_info}\n🌍 Международные возможности: {chunk['text']}\n")
-            elif chunk['field'] == 'companies':
-                 answer_parts.append(f"{source_info}\n🏢 Компании: {chunk['text']}\n")
-            else:
-                answer_parts.append(f"{source_info}\n📝 {chunk['text']}\n")
-        
-        answer = "\n".join(answer_parts)
-        
+        if best_distance > relevance_threshold:
+            # Контекст не найден - сообщаем LLM, что информации нет
+            user_prompt = (
+                f"Вопрос абитуриента: {user_question}\n\n"
+                f"Контекст: Информация по данному вопросу в базе данных не найдена. "
+                f"Пожалуйста, вежливо сообщите абитуриенту, что вы не можете ответить на этот вопрос, "
+                f"так как он не относится к программам магистратуры ИТМО по ИИ. "
+                f"Предложите задать вопросы о программах 'Искусственный интеллект' или 'AI и ML в технических системах'."
+            )
+        else:
+            # Контекст найден - формируем его для LLM
+            relevant_chunks = [chunks[idx] for i, idx in enumerate(indices[0]) if distances[0][i] <= relevance_threshold]
+            
+            # Формируем строку контекста
+            context_parts = []
+            for chunk in relevant_chunks:
+                part = f"Источник: {chunk['source']}\nРаздел: {chunk['field']}\nИнформация: {chunk['text']}"
+                context_parts.append(part)
+            context_text = "\n\n---\n\n".join(context_parts)
+
+            user_prompt = (
+                f"Вопрос абитуриента: {user_question}\n\n"
+                f"Контекст:\n{context_text}\n\n"
+                f"Пожалуйста, ответьте на вопрос абитуриента, используя только информацию из контекста. "
+                f"Если контекст не позволяет ответить, скажите, что информации недостаточно."
+            )
+
+        # 3. Вызов LLM
+        logger.info("Отправка запроса к LLM...")
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            model="gpt-4o-mini", # Используем gpt-4o-mini
+            max_tokens=1000,
+            temperature=0.2 # Низкая температура для более точных и фактических ответов
+        )
+        logger.info("Ответ от LLM получен.")
+
+        # 4. Отправка ответа пользователю
+        answer = chat_completion.choices[0].message.content
         await context.bot.send_message(chat_id=update.effective_chat.id, text=answer)
 
+    except AuthenticationError:
+        logger.error("Ошибка аутентификации OpenAI API.")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=LLM_AUTH_ERROR_MESSAGE)
+    except RateLimitError:
+        logger.error("Превышен лимит запросов к OpenAI API.")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=LLM_RATE_LIMIT_MESSAGE)
+    except APIError as e:
+        logger.error(f"Ошибка API OpenAI: {e}")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=LLM_API_ERROR_MESSAGE)
     except Exception as e:
-        logger.error(f"Ошибка при обработке сообщения: {e}")
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=ERROR_MESSAGE)
+        logger.error(f"Неожиданная ошибка при обработке сообщения: {e}", exc_info=True)
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Произошла непредвиденная ошибка. Попробуйте позже.")
 
+# --- Обновленная функция post_init ---
 async def post_init(application: ApplicationBuilder) -> None:
-    """Функция, вызываемая при запуске бота для загрузки модели и индекса."""
-    global model, index, chunks
+    """Функция, вызываемая при запуске бота для загрузки модели, индекса и клиента API."""
+    global model, index, chunks, programs_data, client
     logger.info("Загрузка модели SentenceTransformer...")
     model = SentenceTransformer(MODEL_NAME)
     logger.info("Модель загружена.")
@@ -200,9 +249,36 @@ async def post_init(application: ApplicationBuilder) -> None:
         with open(CHUNKS_PATH, 'r', encoding='utf-8') as f:
             chunks = json.load(f)
         logger.info("FAISS индекс и чанки загружены.")
-        logger.info(BOT_READY_MESSAGE)
     else:
         logger.error("Не найдены файлы векторной базы знаний. Пожалуйста, сначала запустите data_processor.py")
+        return
+
+    logger.info("Загрузка данных программ для рекомендаций...")
+    if os.path.exists(DATA_FILE_PATH):
+         with open(DATA_FILE_PATH, 'r', encoding='utf-8') as f:
+             programs_data = json.load(f)
+         logger.info("Данные программ для рекомендаций загружены.")
+    else:
+         logger.warning("Файл данных программ не найден. Рекомендации будут ограничены.")
+
+    # Инициализация клиента OpenAI
+    if OPENAI_API_KEY:
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            # Проверка подключения - ИСПРАВЛЕНО
+            client.models.list() # Простой запрос для проверки
+            logger.info("Клиент OpenAI API инициализирован и подключен.")
+        except AuthenticationError:
+            logger.error("Неверный API-ключ OpenAI. Проверьте файл .env.")
+            client = None
+        except Exception as e:
+            logger.error(f"Ошибка при инициализации клиента OpenAI: {e}")
+            client = None
+    else:
+        logger.warning("OPENAI_API_KEY не найден в .env. Функция генерации ответов будет недоступна.")
+        client = None
+
+    logger.info("✅ Бот готов к работе!")
 
 def main():
     """Главная функция для запуска бота."""
@@ -215,7 +291,6 @@ def main():
     # --- Обработчики ---
     app.add_handler(CommandHandler("start", start))
     
-    # ConversationHandler для рекомендаций
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('recommend', recommend_start)],
         states={
@@ -227,7 +302,6 @@ def main():
     )
     app.add_handler(conv_handler)
 
-    # Обработчик всех остальных текстовых сообщений
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("🚀 Бот запущен. Ожидание сообщений...")
@@ -235,3 +309,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+    

@@ -1,9 +1,11 @@
-requests
-beautifulsoup4
-lxml
-transformers # или более новая версия
-torch # Используйте >= для установки последней совместимой версии
-sentence-transformers
-faiss-cpu
-python-telegram-bot
-python-dotenv
+# Последние библиотеки тоже совместимы друг с другом
+requests==2.32.4
+beautifulsoup4==4.13.4
+lxml==6.00
+transformers==4.53.3 
+torch==2.7.1
+sentence-transformers==5.0.0
+faiss-cpu==1.11.0
+python-telegram-bot==22.3
+python-dotenv==1.1.1
+openai==1.97.1

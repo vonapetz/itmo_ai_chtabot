@@ -40,6 +40,9 @@ def parse_program(url, program_name):
         for sibling in about_section.find_next_siblings():
             if sibling.name == 'h2':
                 break
+            # Исправление: игнорируем ссылки "Показать все"
+            if sibling.name == 'a' and sibling.get_text(strip=True) == 'Показать все':
+                continue
             text = sibling.get_text(strip=False)
             if text:
                 content.append(text)
@@ -52,6 +55,9 @@ def parse_program(url, program_name):
         for sibling in career_section.find_next_siblings():
             if sibling.name == 'h2':
                 break
+            # Исправление: игнорируем ссылки "Показать все"
+            if sibling.name == 'a' and sibling.get_text(strip=True) == 'Показать все':
+                continue
             text = sibling.get_text(strip=False)
             if text:
                 content.append(text)
@@ -90,6 +96,9 @@ def parse_program(url, program_name):
         for item in directions_section.find_next_siblings():
              if item.name == 'h2': # Останавливаемся на следующем h2
                  break
+             # Исправление: игнорируем ссылки "Показать все"
+             if item.name == 'a' and item.get_text(strip=True) == 'Показать все':
+                 continue
              if item.name in ['div', 'p']:
                  # Ищем код направления (обычно в h5 или strong)
                  code_elem = item.find(['h5', 'strong'])
@@ -112,6 +121,9 @@ def parse_program(url, program_name):
         for sibling in scholarships_section.find_next_siblings():
             if sibling.name == 'h2':
                 break
+            # Исправление: игнорируем ссылки "Показать все"
+            if sibling.name == 'a' and sibling.get_text(strip=True) == 'Показать все':
+                continue
             text = sibling.get_text(strip=False)
             if text:
                 content.append(text)
@@ -124,6 +136,9 @@ def parse_program(url, program_name):
         for sibling in international_section.find_next_siblings():
             if sibling.name == 'h2':
                 break
+            # Исправление: игнорируем ссылки "Показать все"
+            if sibling.name == 'a' and sibling.get_text(strip=True) == 'Показать все':
+                continue
             text = sibling.get_text(strip=False)
             if text:
                 content.append(text)
@@ -163,3 +178,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
