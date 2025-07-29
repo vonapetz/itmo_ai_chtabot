@@ -3,9 +3,16 @@ requests==2.32.4
 beautifulsoup4==4.13.4
 lxml==6.00
 transformers==4.53.3 
+<<<<<<< HEAD
 torch==2.7.1
+=======
+torch==2.7.1 
+>>>>>>> 1b586ba8f53d01e47bb3f52b5fba881b9a8868f7
 sentence-transformers==5.0.0
 faiss-cpu==1.11.0
 python-telegram-bot==22.3
 python-dotenv==1.1.1
+<<<<<<< HEAD
 openai==1.97.1
+=======
+>>>>>>> 1b586ba8f53d01e47bb3f52b5fba881b9a8868f7
