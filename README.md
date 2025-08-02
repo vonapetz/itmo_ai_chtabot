@@ -11,8 +11,8 @@
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone https://github.com/vonapetz/itmo_ai_chtabot.git
-    cd itmo_ai_chatbot
+    git clone https://github.com/vonapetz/ITMO_QA_Bot.git
+    cd ITMO_QA_Bot
     ```
 
 2.  **Создайте виртуальное окружение (рекомендуется):**
